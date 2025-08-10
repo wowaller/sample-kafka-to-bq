@@ -119,7 +119,7 @@ public class SampleKafkaBQPipeline {
     Map<String, Object> mapFromProps = new HashMap<>();
     mapFromProps.put("security.protocol", "SASL_SSL");
     mapFromProps.put("sasl.mechanism", "PLAIN");
-    if (options.getKafkaUsername() != null) {
+    if (!options.getKafkaUsername().isEmpty()) {
       mapFromProps.put("sasl.jaas.config", "org.apache.kafka.common.security.plain.PlainLoginModule required " +
               "username=\"" + options.getKafkaUsername() + "\" " +
               "password=\"" + options.getKafkaPassword() + "\"");

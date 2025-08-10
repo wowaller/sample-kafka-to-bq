@@ -1,5 +1,6 @@
 package com.google.bwo.sample;
 
+import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.Validation.Required;
@@ -29,14 +30,17 @@ public interface ExamplePipelineOptions extends PipelineOptions {
     void setGcsTempLocation(ValueProvider<String> value);
 
     @Description("Extra Kafka properties file.")
+    @Default.String("")
     String getKafkaComsumerProps();
     void setKafkaComsumerProps();
 
     @Description("Optional Kafka username.")
+    @Default.String("")
     String getKafkaUsername();
     void setKafkaUsername();
 
     @Description("Optional Kafka password.")
+    @Default.String("")
     String getKafkaPassword();
     void setKafkaPassword();
 }
