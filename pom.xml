@@ -311,21 +311,20 @@
         </dependency>
 
         <!-- IOs -->
+        <!--
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-sdks-java-io-jdbc</artifactId>
         </dependency>
-
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-sdks-java-io-elasticsearch</artifactId>
         </dependency>
-
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-sdks-java-io-hbase</artifactId>
         </dependency>
-
+        -->
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-sdks-java-io-kafka</artifactId>
@@ -335,6 +334,7 @@
             <artifactId>kafka-clients</artifactId>
             <version>${kafka.client.ver}</version>
         </dependency>
+
 
         <!-- Google Cloud Managed Kafka -->
         <dependency>
