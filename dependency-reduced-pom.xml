@@ -184,6 +184,7 @@
     <guava.version>33.4.0-jre</guava.version>
     <cmn.io.ver>2.12.0</cmn.io.ver>
     <sonar-maven-plugin.version>5.0.0.4389</sonar-maven-plugin.version>
+    <hadoop.version>3.3.4</hadoop.version>
     <httpclient.version>4.5.13</httpclient.version>
     <slf4j.version>1.7.30</slf4j.version>
     <gson.ver>2.10.1</gson.ver>
