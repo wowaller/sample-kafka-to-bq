@@ -76,7 +76,7 @@ public class SampleKafkaBQPipeline {
                 if (entry != null) {
                     TableRow row =
                             new TableRow()
-                                    .set("timestamp", Instant.parse(entry.timestamp).toEpochMilli())
+                                    .set("timestamp", Long.toString(Instant.parse(entry.timestamp).getEpochSecond()))
                                     .set("severity", entry.severity)
                                     .set("service", entry.service)
                                     .set("message", entry.message)
