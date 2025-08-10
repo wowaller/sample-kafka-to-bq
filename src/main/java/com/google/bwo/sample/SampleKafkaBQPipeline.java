@@ -9,6 +9,8 @@ import com.google.gson.JsonSyntaxException;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -74,7 +76,7 @@ public class SampleKafkaBQPipeline {
                 if (entry != null) {
                     TableRow row =
                             new TableRow()
-                                    .set("timestamp", entry.timestamp)
+                                    .set("timestamp", Instant.parse(entry.timestamp).toEpochMilli())
                                     .set("severity", entry.severity)
                                     .set("service", entry.service)
                                     .set("message", entry.message)
