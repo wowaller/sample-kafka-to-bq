@@ -26,6 +26,7 @@ import org.apache.beam.sdk.io.kafka.KafkaRecord;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.*;
 import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.TypeDescriptors;
 import org.apache.kafka.common.serialization.LongDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.joda.time.Duration;
@@ -33,74 +34,74 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class SampleKafkaBQPipeline {
-  private static final Logger LOG = LoggerFactory.getLogger(SampleKafkaBQPipeline.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SampleKafkaBQPipeline.class);
 
-  // A POJO (Plain Old Java Object) to represent the structure of your JSON log messages.
-  // This makes parsing type-safe and easy to manage.
-  @DefaultCoder(AvroCoder.class)
-  public static class LogEntry {
-    String timestamp;
-    String severity;
-    String service;
-    String message;
-    String trace_id;
-    String request_details;
-    Long latency_ms;
-  }
-
-  // A DoFn to parse JSON strings into TableRow objects for BigQuery.
-  public static class JsonToTableRowFn extends DoFn<String, TableRow> {
-    private transient Gson gson;
-
-    @Setup
-    public void setup() {
-      gson = new Gson();
+    // A POJO (Plain Old Java Object) to represent the structure of your JSON log messages.
+    // This makes parsing type-safe and easy to manage.
+    @DefaultCoder(AvroCoder.class)
+    public static class LogEntry {
+        String timestamp;
+        String severity;
+        String service;
+        String message;
+        String trace_id;
+        String request_details;
+        Long latency_ms;
     }
 
-    @ProcessElement
-    public void processElement(@Element String json, OutputReceiver<TableRow> out) {
-      try {
-        LogEntry entry = gson.fromJson(json, LogEntry.class);
-        if (entry != null) {
-          TableRow row =
-              new TableRow()
-                  .set("timestamp", entry.timestamp)
-                  .set("severity", entry.severity)
-                  .set("service", entry.service)
-                  .set("message", entry.message)
-                  .set("trace_id", entry.trace_id)
-                  .set("request_details", entry.request_details)
-                  .set("latency_ms", entry.latency_ms);
-          out.output(row);
+    // A DoFn to parse JSON strings into TableRow objects for BigQuery.
+    public static class JsonToTableRowFn extends DoFn<String, TableRow> {
+        private transient Gson gson;
+
+        @Setup
+        public void setup() {
+            gson = new Gson();
         }
-      } catch (JsonSyntaxException e) {
-        // For production, push malformed JSON to a dead-letter queue for analysis.
-        LOG.error("Failed to parse JSON record: {}", json, e);
-      }
+
+        @ProcessElement
+        public void processElement(@Element String json, OutputReceiver<TableRow> out) {
+            try {
+                LogEntry entry = gson.fromJson(json, LogEntry.class);
+                if (entry != null) {
+                    TableRow row =
+                            new TableRow()
+                                    .set("timestamp", entry.timestamp)
+                                    .set("severity", entry.severity)
+                                    .set("service", entry.service)
+                                    .set("message", entry.message)
+                                    .set("trace_id", entry.trace_id)
+                                    .set("request_details", entry.request_details)
+                                    .set("latency_ms", entry.latency_ms);
+                    out.output(row);
+                }
+            } catch (JsonSyntaxException e) {
+                // For production, push malformed JSON to a dead-letter queue for analysis.
+                LOG.error("Failed to parse JSON record: {}", json, e);
+            }
+        }
     }
-  }
 
-  public static void main(String[] args) {
-    // Parse the pipeline options passed into the application. Example:
-    //   --bootstrapServer=host:port --topic1=my-topic --bqOutputTable=project:dataset.table
-    // For more information, see https://beam.apache.org/documentation/programming-guide/#configuring-pipeline-options
-    PipelineOptionsFactory.register(ExamplePipelineOptions.class);
-    ExamplePipelineOptions options = PipelineOptionsFactory.fromArgs(args)
-            .withValidation()
-            .as(ExamplePipelineOptions.class);
+    public static void main(String[] args) {
+        // Parse the pipeline options passed into the application. Example:
+        //   --bootstrapServer=host:port --topic1=my-topic --bqOutputTable=project:dataset.table
+        // For more information, see https://beam.apache.org/documentation/programming-guide/#configuring-pipeline-options
+        PipelineOptionsFactory.register(ExamplePipelineOptions.class);
+        ExamplePipelineOptions options = PipelineOptionsFactory.fromArgs(args)
+                .withValidation()
+                .as(ExamplePipelineOptions.class);
 
-    // Define the BigQuery table schema to match your target table.
-    TableSchema bqSchema =
-        new TableSchema()
-            .setFields(
-                List.of(
-                    new TableFieldSchema().setName("timestamp").setType("DATETIME"),
-                    new TableFieldSchema().setName("severity").setType("STRING"),
-                    new TableFieldSchema().setName("service").setType("STRING"),
-                    new TableFieldSchema().setName("message").setType("STRING"),
-                    new TableFieldSchema().setName("trace_id").setType("STRING"),
-                    new TableFieldSchema().setName("request_details").setType("STRING"),
-                    new TableFieldSchema().setName("latency_ms").setType("INTEGER")));
+        // Define the BigQuery table schema to match your target table.
+        TableSchema bqSchema =
+                new TableSchema()
+                        .setFields(
+                                List.of(
+                                        new TableFieldSchema().setName("timestamp").setType("DATETIME"),
+                                        new TableFieldSchema().setName("severity").setType("STRING"),
+                                        new TableFieldSchema().setName("service").setType("STRING"),
+                                        new TableFieldSchema().setName("message").setType("STRING"),
+                                        new TableFieldSchema().setName("trace_id").setType("STRING"),
+                                        new TableFieldSchema().setName("request_details").setType("STRING"),
+                                        new TableFieldSchema().setName("latency_ms").setType("INTEGER")));
 
 //    // Load extra properties
 //    Properties prop = new Properties();
@@ -116,52 +117,53 @@ public class SampleKafkaBQPipeline {
 //                    e -> String.valueOf(e.getKey()),
 //                    e -> String.valueOf(e.getValue())
 //            ));
-    Map<String, Object> mapFromProps = new HashMap<>();
-    mapFromProps.put("security.protocol", "SASL_SSL");
-    mapFromProps.put("sasl.mechanism", "PLAIN");
-    if (!options.getKafkaUsername().isEmpty()) {
-      mapFromProps.put("sasl.jaas.config", "org.apache.kafka.common.security.plain.PlainLoginModule required " +
-              "username=\"" + options.getKafkaUsername() + "\" " +
-              "password=\"" + options.getKafkaPassword() + "\"");
-    }
+        Map<String, Object> mapFromProps = new HashMap<>();
+        mapFromProps.put("security.protocol", "SASL_SSL");
+        mapFromProps.put("sasl.mechanism", "PLAIN");
+        if (!options.getKafkaUsername().isEmpty()) {
+            mapFromProps.put("sasl.jaas.config", "org.apache.kafka.common.security.plain.PlainLoginModule required " +
+                    "username=\"" + options.getKafkaUsername() + "\" " +
+                    "password=\"" + options.getKafkaPassword() + "\"");
+        }
 
-    // Build the pipeline.
-    Pipeline pipeline = Pipeline.create(options);
+        // Build the pipeline.
+        Pipeline pipeline = Pipeline.create(options);
 
-    pipeline
-        .apply(
-            "ReadFromKafka",
-            KafkaIO.<Long, String>read()
-                    .withBootstrapServers(options.getBootstrapServer())
-                    .withTopics(List.of(options.getTopic()))
-                    .withKeyDeserializer(LongDeserializer.class)
-                    .withValueDeserializer(StringDeserializer.class)
-                    // withMaxReadTime makes this a bounded job for testing. Remove for a streaming pipeline.
-                    .withMaxReadTime(Duration.standardSeconds(60))
-                    .withConsumerConfigUpdates(mapFromProps)
-        )
-        // We only need the message value (the JSON string).
-        .apply("ExtractMessageValue", MapElements.via(new SimpleFunction<KafkaRecord<Long, String>, String>() {
-          @Override
-          public String apply(KafkaRecord<Long, String> input) {
-            // Return the value part of the key-value pair.
-            return input.getKV().getValue();
-          }
-        }))
-        .apply("ParseJsonToTableRow", ParDo.of(new JsonToTableRowFn()))
-        .apply(
-            "WriteToBigQuery",
-            BigQueryIO.writeTableRows()
-                .to(options.getBqOutputTable())
-                .withSchema(bqSchema)
-                .withCreateDisposition(CreateDisposition.CREATE_IF_NEEDED)
-                .withWriteDisposition(WriteDisposition.WRITE_APPEND)
-                .withMethod(BigQueryIO.Write.Method.FILE_LOADS)
-                .withAutoSharding()
-                .withTriggeringFrequency(Duration.standardMinutes(15))
-                .withCustomGcsTempLocation(options.getGcsTempLocation())
-        );
+        pipeline
+                .apply(
+                        "ReadFromKafka",
+                        KafkaIO.<Long, String>read()
+                                .withBootstrapServers(options.getBootstrapServer())
+                                .withTopics(List.of(options.getTopic()))
+                                .withKeyDeserializer(LongDeserializer.class)
+                                .withValueDeserializer(StringDeserializer.class)
+                                // withMaxReadTime makes this a bounded job for testing. Remove for a streaming pipeline.
+//                    .withMaxReadTime(Duration.standardSeconds(60))
+                                .withConsumerConfigUpdates(mapFromProps)
+                )
+                // We only need the message value (the JSON string).
+//        .apply("ExtractMessageValue", MapElements.via(new SimpleFunction<KafkaRecord<Long, String>, String>() {
+//          @Override
+//          public String apply(KafkaRecord<Long, String> input) {
+//            // Return the value part of the key-value pair.
+//            return input.getKV().getValue();
+//          }
+//        }))
+                .apply("ExtractMessageValue", MapElements.into(TypeDescriptors.strings()).via(records -> records.getKV().getValue()))
+                .apply("ParseJsonToTableRow", ParDo.of(new JsonToTableRowFn()))
+                .apply(
+                        "WriteToBigQuery",
+                        BigQueryIO.writeTableRows()
+                                .to(options.getBqOutputTable())
+                                .withSchema(bqSchema)
+                                .withCreateDisposition(CreateDisposition.CREATE_IF_NEEDED)
+                                .withWriteDisposition(WriteDisposition.WRITE_APPEND)
+                                .withMethod(BigQueryIO.Write.Method.FILE_LOADS)
+                                .withAutoSharding()
+                                .withTriggeringFrequency(Duration.standardMinutes(15))
+                                .withCustomGcsTempLocation(options.getGcsTempLocation())
+                );
 
-        pipeline.run().waitUntilFinish();
+        pipeline.run();
     }
 }
