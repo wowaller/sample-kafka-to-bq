@@ -39,13 +39,22 @@ public class SampleKafkaBQPipeline {
     // A POJO (Plain Old Java Object) to represent the structure of your JSON log messages.
     // This makes parsing type-safe and easy to manage.
     @DefaultCoder(AvroCoder.class)
+    public static class RequestDetails {
+        String method;
+        String url;
+        Integer http_status;
+        String user_agent;
+        String ip_address;
+    }
+
+    @DefaultCoder(AvroCoder.class)
     public static class LogEntry {
         String timestamp;
         String severity;
         String service;
         String message;
         String trace_id;
-        String request_details;
+        RequestDetails request_details;
         Long latency_ms;
     }
 
@@ -70,7 +79,7 @@ public class SampleKafkaBQPipeline {
                                     .set("service", entry.service)
                                     .set("message", entry.message)
                                     .set("trace_id", entry.trace_id)
-                                    .set("request_details", entry.request_details)
+                                    .set("request_details", gson.toJson(entry.request_details))
                                     .set("latency_ms", entry.latency_ms);
                     out.output(row);
                 }
@@ -163,7 +172,7 @@ public class SampleKafkaBQPipeline {
                                 .withWriteDisposition(WriteDisposition.WRITE_APPEND)
                                 .withMethod(BigQueryIO.Write.Method.FILE_LOADS)
                                 .withAutoSharding()
-                                .withTriggeringFrequency(Duration.standardMinutes(15))
+                                .withTriggeringFrequency(Duration.standardMinutes(options.getTriggeringFrequency()))
                                 .withCustomGcsTempLocation(options.getGcsTempLocation())
                 );
 
