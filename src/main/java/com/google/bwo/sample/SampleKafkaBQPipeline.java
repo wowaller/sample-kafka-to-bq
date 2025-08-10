@@ -66,9 +66,7 @@ public class SampleKafkaBQPipeline {
         private transient Gson gson;
         // Formatter for BigQuery DATETIME format (YYYY-MM-DD'T'HH:MI:SS.ssssss).
         // Using the 'T' separator is the canonical format for BigQuery.
-        private static final DateTimeFormatter BQ_DATETIME_FORMATTER =
-                DateTimeFormat.forPattern("yyyy-MM-dd'T'HH:mm:ss.SSS");
-
+        private static final DateTimeFormatter BQ_DATETIME_FORMATTER = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss");
         @Setup
         public void setup() {
             gson = new Gson();
@@ -78,10 +76,9 @@ public class SampleKafkaBQPipeline {
         public void processElement(@Element String json, OutputReceiver<TableRow> out) {
             try {
                 LogEntry entry = gson.fromJson(json, LogEntry.class);
-                if (entry != null && entry.timestamp != null && !entry.timestamp.isEmpty()) {
+                if (entry != null) {
                     // 1. Parse the timestamp string to a Joda Instant.
                     Instant eventTime = Instant.parse(entry.timestamp);
-
                     // 2. Format the timestamp into the canonical string for BigQuery's DATETIME type.
                     String formattedTimestamp = BQ_DATETIME_FORMATTER.print(eventTime);
 
@@ -94,15 +91,11 @@ public class SampleKafkaBQPipeline {
                                     .set("trace_id", entry.trace_id)
                                     .set("request_details", gson.toJson(entry.request_details))
                                     .set("latency_ms", entry.latency_ms);
-                    // 3. Output the TableRow with its original event time for correct windowing.
                     out.output(row);
                 }
             } catch (JsonSyntaxException e) {
                 // For production, push malformed JSON to a dead-letter queue for analysis.
                 LOG.error("Failed to parse JSON record: {}", json, e);
-            } catch (IllegalArgumentException e) {
-                // Catch potential errors from Instant.parse()
-                LOG.error("Failed to parse timestamp from record: {}", json, e);
             }
         }
     }
@@ -187,12 +180,12 @@ public class SampleKafkaBQPipeline {
                                 .withSchema(bqSchema)
                                 .withCreateDisposition(CreateDisposition.CREATE_IF_NEEDED)
                                 .withWriteDisposition(WriteDisposition.WRITE_APPEND)
-                                // Use STORAGE_WRITE_API for low-latency streaming.
-                                .withMethod(BigQueryIO.Write.Method.STORAGE_WRITE_API)
+                                .withMethod(BigQueryIO.Write.Method.FILE_LOADS)
+                                .withAutoSharding()
+                                .withTriggeringFrequency(Duration.standardMinutes(options.getTriggeringFrequency()))
                                 .withCustomGcsTempLocation(options.getGcsTempLocation())
                 );
 
-        // For a streaming pipeline, run().waitUntilFinish() will block and keep the job alive.
-        pipeline.run().waitUntilFinish();
+        pipeline.run();
     }
 }
