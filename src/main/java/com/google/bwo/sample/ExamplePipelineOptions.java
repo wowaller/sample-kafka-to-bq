@@ -29,10 +29,10 @@ public interface ExamplePipelineOptions extends PipelineOptions {
     ValueProvider<String> getGcsTempLocation();
     void setGcsTempLocation(ValueProvider<String> value);
 
-//    @Description("Extra Kafka properties file.")
-//    @Default.String("")
-//    String getKafkaComsumerProps();
-//    void setKafkaComsumerProps();
+    @Description("Extra Kafka properties file.")
+    @Default.String("")
+    String getKafkaComsumerProps();
+    void setKafkaComsumerProps(String value);
 
     @Description("Optional Kafka username.")
     @Default.String("kafka2bq@binggang-lab.iam.gserviceaccount.com")

@@ -103,27 +103,30 @@ public class SampleKafkaBQPipeline {
                                         new TableFieldSchema().setName("request_details").setType("STRING"),
                                         new TableFieldSchema().setName("latency_ms").setType("INTEGER")));
 
-//    // Load extra properties
-//    Properties prop = new Properties();
-//    try (InputStream input = new FileInputStream(options.getKafkaComsumerProps())) {
-//      // load a properties file
-//      prop.load(input);
-//    } catch (IOException ex) {
-//      ex.printStackTrace();
-//    }
-//
-//    Map<String, Object> mapFromProps = prop.entrySet().stream()
-//            .collect(Collectors.toMap(
-//                    e -> String.valueOf(e.getKey()),
-//                    e -> String.valueOf(e.getValue())
-//            ));
         Map<String, Object> mapFromProps = new HashMap<>();
-        mapFromProps.put("security.protocol", "SASL_SSL");
-        mapFromProps.put("sasl.mechanism", "PLAIN");
-        if (!options.getKafkaUsername().isEmpty()) {
-            mapFromProps.put("sasl.jaas.config", "org.apache.kafka.common.security.plain.PlainLoginModule required " +
-                    "username=\"" + options.getKafkaUsername() + "\" " +
-                    "password=\"" + options.getKafkaPassword() + "\"");
+        // Load extra properties
+        if(!options.getKafkaComsumerProps().isEmpty()) {
+            Properties prop = new Properties();
+            try (InputStream input = new FileInputStream(options.getKafkaComsumerProps())) {
+                // load a properties file
+                prop.load(input);
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            }
+            mapFromProps.putAll(prop.entrySet().stream()
+                    .collect(Collectors.toMap(
+                            e -> String.valueOf(e.getKey()),
+                            e -> String.valueOf(e.getValue())
+                    )));
+        }
+        else {
+            mapFromProps.put("security.protocol", "SASL_SSL");
+            mapFromProps.put("sasl.mechanism", "PLAIN");
+            if (!options.getKafkaUsername().isEmpty()) {
+                mapFromProps.put("sasl.jaas.config", "org.apache.kafka.common.security.plain.PlainLoginModule required " +
+                        "username=\"" + options.getKafkaUsername() + "\" " +
+                        "password=\"" + options.getKafkaPassword() + "\";");
+            }
         }
 
         // Build the pipeline.
