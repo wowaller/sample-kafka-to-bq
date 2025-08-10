@@ -1,0 +1,90 @@
+#!/bin/bash
+
+# Author: Bin Wu <binwu@google.com>
+
+PWD=`pwd`
+JAVA=`which java`
+#VER=$(<ver)
+IPADDR=$(hostname -I | cut -d ' ' -f 1)
+
+__usage() {
+    echo "Usage: run {lc|df|clean}"
+}
+
+__local() {
+    mvn compile exec:java \
+        -Dexec.mainClass=bindiego.BindiegoStreaming \
+        -Dexec.args="--output=./output/"
+}
+
+__dataflow() {
+    mvn -Pdataflow-runner compile exec:java \
+        -Dexec.mainClass=bindiego.BindiegoStreaming \
+        -Dexec.cleanupDaemonThreads=false \
+        -Dexec.args="--project=google.com:bin-wus-learning-center \
+        --streaming=true \
+        --autoscalingAlgorithm=THROUGHPUT_BASED \
+        --maxNumWorkers=20 \
+        --workerMachineType=n1-standard-2 \
+        --diskSizeGb=64 \
+        --numWorkers=3 \
+        --tempLocation=gs://bindiego/tmp/ \
+        --gcpTempLocation=gs://bindiego/tmp/gcp/ \
+        --gcsTempLocation=gs://bindiego/tmp/gcs/ \
+        --stagingLocation=gs://bindiego/staging/ \
+        --runner=DataflowRunner \
+        --topic=projects/google.com:bin-wus-learning-center/topics/dingoactions \
+        --subscription=projects/google.com:bin-wus-learning-center/subscriptions/dingoactions2avro \
+        --numShards=1 \
+        --windowSize=6s \
+        --allowedLateness=8s \
+        --earlyFiringPeriod=2s \
+        --lateFiringCount=1 \
+        --filenamePrefix=raycom. \
+        --outputDir=gs://bindiego/raycom/out/ \
+        --errOutputDir=gs://bindiego/raycom/out/err/ \
+        --bqSchema=gs://bindiego/raycom/schemas/dingoactions.json \
+        --bqOutputTable=google.com:bin-wus-learning-center:raycom.dingoactions \
+        --avroSchema=gs://bindiego/raycom/schemas/dingoactions.avsc \
+        --btInstanceId=bigbase \
+        --btTableIdTall=bttall \
+        --btTableIdWide=btwide \
+        --jdbcClass=com.mysql.cj.jdbc.Driver \
+        --jdbcConn=jdbc:mysql://10.140.0.3:3306/gcp \
+        --jdbcUsername=gcp \
+        --jdbcPassword=gcp2020 \
+        --defaultWorkerLogLevel=INFO \
+        --jobName=raycom-streaming \
+        --region=asia-east1"
+        # --update \
+}
+
+__clean() {
+    mvn clean; rm -f output-*
+}
+
+__main() {
+    if [ $# -eq 0 ]
+    then
+        __usage
+    else
+        case $1 in
+            lc)
+                __local
+                ;;
+            df)
+                __dataflow
+                ;;
+            clean)
+                __clean
+                ;;
+            *)
+                __usage
+                ;;
+        esac
+    fi
+}
+
+__main $@
+
+exit 0

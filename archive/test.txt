@@ -1,0 +1,143 @@
+package com.google.bwo.sample;
+
+import com.google.api.services.bigquery.model.TableFieldSchema;
+import com.google.api.services.bigquery.model.TableRow;
+import com.google.api.services.bigquery.model.TableSchema;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+import com.google.gson.JsonSyntaxException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.coders.DefaultCoder;
+import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
+import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
+import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.CreateDisposition;
+import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.WriteDisposition;
+import org.apache.beam.sdk.io.kafka.KafkaIO;
+import org.apache.beam.sdk.io.kafka.KafkaRecord;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.transforms.*;
+import org.apache.beam.sdk.values.TypeDescriptors;
+import org.apache.beam.sdk.values.KV;
+import org.apache.kafka.common.serialization.LongDeserializer;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.joda.time.Duration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class SampleKafkaBQPipeline {
+  private static final Logger LOG = LoggerFactory.getLogger(SampleKafkaBQPipeline.class);
+
+  // A POJO (Plain Old Java Object) to represent the structure of your JSON log messages.
+  // This makes parsing type-safe and easy to manage.
+  @DefaultCoder(AvroCoder.class)
+  public static class LogEntry {
+    String timestamp;
+    String severity;
+    String service;
+    String message;
+    String trace_id;
+    String request_details;
+    Long latency_ms;
+  }
+
+  // A DoFn to parse JSON strings into TableRow objects for BigQuery.
+  public static class JsonToTableRowFn extends DoFn<String, TableRow> {
+    private transient Gson gson;
+
+    @Setup
+    public void setup() {
+      gson = new Gson();
+    }
+
+    @ProcessElement
+    public void processElement(@Element String json, OutputReceiver<TableRow> out) {
+      try {
+        LogEntry entry = gson.fromJson(json, LogEntry.class);
+        if (entry != null) {
+          TableRow row =
+              new TableRow()
+                  .set("timestamp", entry.timestamp)
+                  .set("severity", entry.severity)
+                  .set("service", entry.service)
+                  .set("message", entry.message)
+                  .set("trace_id", entry.trace_id)
+                  .set("request_details", entry.request_details)
+                  .set("latency_ms", entry.latency_ms);
+          out.output(row);
+        }
+      } catch (JsonSyntaxException e) {
+        // For production, push malformed JSON to a dead-letter queue for analysis.
+        LOG.error("Failed to parse JSON record: {}", json, e);
+      }
+    }
+  }
+
+  public static void main(String[] args) {
+    // Parse the pipeline options passed into the application. Example:
+    //   --bootstrapServer=host:port --topic1=my-topic --bqOutputTable=project:dataset.table
+    // For more information, see https://beam.apache.org/documentation/programming-guide/#configuring-pipeline-options
+    PipelineOptionsFactory.register(ExamplePipelineOptions.class);
+    ExamplePipelineOptions options = PipelineOptionsFactory.fromArgs(args)
+            .withValidation()
+            .as(ExamplePipelineOptions.class);
+
+    // Parse Kafka consumer properties in JSON format from pipeline options.
+    final Map<String, Object> kafkaConsumerConfig = new HashMap<>();
+    String consumerPropsJson = options.getKafkaConsumerProps();
+    if (consumerPropsJson != null && !consumerPropsJson.isEmpty()) {
+      // Using a TypeToken to correctly parse the JSON into a Map
+      java.lang.reflect.Type type = new TypeToken<Map<String, Object>>() {}.getType();
+      kafkaConsumerConfig.putAll(new Gson().fromJson(consumerPropsJson, type));
+      LOG.info("Using custom Kafka consumer config: {}", kafkaConsumerConfig);
+    }
+
+    // Define the BigQuery table schema to match your target table.
+    TableSchema bqSchema =
+        new TableSchema()
+            .setFields(
+                List.of(
+                    new TableFieldSchema().setName("timestamp").setType("DATETIME"),
+                    new TableFieldSchema().setName("severity").setType("STRING"),
+                    new TableFieldSchema().setName("service").setType("STRING"),
+                    new TableFieldSchema().setName("message").setType("STRING"),
+                    new TableFieldSchema().setName("trace_id").setType("STRING"),
+                    new TableFieldSchema().setName("request_details").setType("STRING"),
+                    new TableFieldSchema().setName("latency_ms").setType("INTEGER")));
+
+    // Build the pipeline.
+    Pipeline pipeline = Pipeline.create(options);
+
+    pipeline
+        .apply(
+            "ReadFromKafka",
+            KafkaIO.<Long, String>read()
+                .withBootstrapServers(options.getBootstrapServer())
+                .withTopics(List.of(options.getTopic()))
+                .withKeyDeserializer(LongDeserializer.class)
+                .withValueDeserializer(StringDeserializer.class)
+                .withConsumerConfigUpdates(kafkaConsumerConfig)
+                // withMaxReadTime makes this a bounded job for testing. Remove for a streaming pipeline.
+                .withMaxReadTime(Duration.standardSeconds(60)))
+        // We only need the message value (the JSON string).
+        .apply("ExtractMessageValue",
+            MapElements.into(TypeDescriptors.strings()).via(record -> record.getKV().getValue()))
+        .apply("ParseJsonToTableRow", ParDo.of(new JsonToTableRowFn()))
+        .apply(
+            "WriteToBigQuery",
+            BigQueryIO.writeTableRows()
+                .to(options.getBqOutputTable())
+                .withSchema(bqSchema)
+                .withCreateDisposition(CreateDisposition.CREATE_IF_NEEDED)
+                .withWriteDisposition(WriteDisposition.WRITE_APPEND)
+                .withMethod(BigQueryIO.Write.Method.FILE_LOADS)
+                .withAutoSharding()
+                .withTriggeringFrequency(Duration.standardMinutes(15))
+        );
+
+
+        pipeline.run().waitUntilFinish();
+    }
+}
