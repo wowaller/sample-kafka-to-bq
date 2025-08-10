@@ -9,8 +9,6 @@ import com.google.gson.JsonSyntaxException;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +30,9 @@ import org.apache.beam.sdk.values.TypeDescriptors;
 import org.apache.kafka.common.serialization.LongDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.joda.time.Duration;
+import org.joda.time.Instant;
+import org.joda.time.format.DateTimeFormat;
+import org.joda.time.format.DateTimeFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,6 +64,10 @@ public class SampleKafkaBQPipeline {
     // A DoFn to parse JSON strings into TableRow objects for BigQuery.
     public static class JsonToTableRowFn extends DoFn<String, TableRow> {
         private transient Gson gson;
+        // Formatter for BigQuery DATETIME format (YYYY-MM-DD'T'HH:MI:SS.ssssss).
+        // Using the 'T' separator is the canonical format for BigQuery.
+        private static final DateTimeFormatter BQ_DATETIME_FORMATTER =
+                DateTimeFormat.forPattern("yyyy-MM-dd'T'HH:mm:ss.SSS");
 
         @Setup
         public void setup() {
@@ -73,21 +78,31 @@ public class SampleKafkaBQPipeline {
         public void processElement(@Element String json, OutputReceiver<TableRow> out) {
             try {
                 LogEntry entry = gson.fromJson(json, LogEntry.class);
-                if (entry != null) {
+                if (entry != null && entry.timestamp != null && !entry.timestamp.isEmpty()) {
+                    // 1. Parse the timestamp string to a Joda Instant.
+                    Instant eventTime = Instant.parse(entry.timestamp);
+
+                    // 2. Format the timestamp into the canonical string for BigQuery's DATETIME type.
+                    String formattedTimestamp = BQ_DATETIME_FORMATTER.print(eventTime);
+
                     TableRow row =
                             new TableRow()
-                                    .set("timestamp", Instant.parse(entry.timestamp).getEpochSecond())
+                                    .set("timestamp", formattedTimestamp)
                                     .set("severity", entry.severity)
                                     .set("service", entry.service)
                                     .set("message", entry.message)
                                     .set("trace_id", entry.trace_id)
                                     .set("request_details", gson.toJson(entry.request_details))
                                     .set("latency_ms", entry.latency_ms);
+                    // 3. Output the TableRow with its original event time for correct windowing.
                     out.output(row);
                 }
             } catch (JsonSyntaxException e) {
                 // For production, push malformed JSON to a dead-letter queue for analysis.
                 LOG.error("Failed to parse JSON record: {}", json, e);
+            } catch (IllegalArgumentException e) {
+                // Catch potential errors from Instant.parse()
+                LOG.error("Failed to parse timestamp from record: {}", json, e);
             }
         }
     }
@@ -172,12 +187,12 @@ public class SampleKafkaBQPipeline {
                                 .withSchema(bqSchema)
                                 .withCreateDisposition(CreateDisposition.CREATE_IF_NEEDED)
                                 .withWriteDisposition(WriteDisposition.WRITE_APPEND)
-                                .withMethod(BigQueryIO.Write.Method.FILE_LOADS)
-                                .withAutoSharding()
-                                .withTriggeringFrequency(Duration.standardMinutes(options.getTriggeringFrequency()))
+                                // Use STORAGE_WRITE_API for low-latency streaming.
+                                .withMethod(BigQueryIO.Write.Method.STORAGE_WRITE_API)
                                 .withCustomGcsTempLocation(options.getGcsTempLocation())
                 );
 
-        pipeline.run();
+        // For a streaming pipeline, run().waitUntilFinish() will block and keep the job alive.
+        pipeline.run().waitUntilFinish();
     }
 }
