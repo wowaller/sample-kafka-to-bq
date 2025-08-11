@@ -57,5 +57,5 @@ public interface ExamplePipelineOptions extends PipelineOptions {
     @Description("Set file shades. Default 0, autoshading.")
     @Default.Integer(0)
     Integer getFileShades();
-    void setUseAutoShading(Integer value);
+    void setFileShades(Integer value);
 }
