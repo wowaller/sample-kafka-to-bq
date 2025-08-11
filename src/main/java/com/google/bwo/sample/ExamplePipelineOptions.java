@@ -44,9 +44,13 @@ public interface ExamplePipelineOptions extends PipelineOptions {
     String getKafkaPassword();
     void setKafkaPassword(String value);
 
-    @Description("Optional Kafka password.")
+    @Description("Triggering frequency in seconds.")
     @Default.Long(15)
     Long getTriggeringFrequency();
     void setTriggeringFrequency(Long value);
 
+    @Description("Triggering frequency in seconds.")
+    @Default.Boolean(true)
+    Boolean getUseFileLoads();
+    void setUseFileLoads(Boolean value);
 }

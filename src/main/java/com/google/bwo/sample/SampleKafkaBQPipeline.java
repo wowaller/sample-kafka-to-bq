@@ -181,9 +181,12 @@ public class SampleKafkaBQPipeline {
                                 .withSchema(bqSchema)
                                 .withCreateDisposition(CreateDisposition.CREATE_IF_NEEDED)
                                 .withWriteDisposition(WriteDisposition.WRITE_APPEND)
-                                .withMethod(BigQueryIO.Write.Method.FILE_LOADS)
+                                .withMethod(
+                                        options.getUseFileLoads()?
+                                                BigQueryIO.Write.Method.FILE_LOADS:BigQueryIO.Write.Method.STORAGE_WRITE_API
+                                )
                                 .withAutoSharding()
-                                .withTriggeringFrequency(Duration.standardMinutes(options.getTriggeringFrequency()))
+                                .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
                                 .withCustomGcsTempLocation(options.getGcsTempLocation())
                 );
 
