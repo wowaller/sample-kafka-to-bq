@@ -62,7 +62,7 @@ public class SampleKafkaBQPipeline {
     }
 
     // A DoFn to parse JSON strings into TableRow objects for BigQuery.
-    public static class JsonToTableRowFn extends DoFn<String, TableRow> {
+    public static class JsonToTableRowFn extends DoFn<KafkaRecord<Long, String>, TableRow> {
         private transient Gson gson;
         // Formatter for BigQuery DATETIME format (YYYY-MM-DD'T'HH:MI:SS.ssssss).
         // Using the 'T' separator is the canonical format for BigQuery.
@@ -73,8 +73,9 @@ public class SampleKafkaBQPipeline {
         }
 
         @ProcessElement
-        public void processElement(@Element String json, OutputReceiver<TableRow> out) {
+        public void processElement(@Element KafkaRecord<Long, String> record, OutputReceiver<TableRow> out) {
             try {
+                String json = record.getKV().getValue();
                 LogEntry entry = gson.fromJson(json, LogEntry.class);
                 if (entry != null) {
                     // 1. Parse the timestamp string to a Joda Instant.
@@ -95,7 +96,7 @@ public class SampleKafkaBQPipeline {
                 }
             } catch (JsonSyntaxException e) {
                 // For production, push malformed JSON to a dead-letter queue for analysis.
-                LOG.error("Failed to parse JSON record: {}", json, e);
+                LOG.error("Failed to parse JSON record: {}", record.getKV().getValue(), e);
             }
         }
     }
@@ -171,7 +172,7 @@ public class SampleKafkaBQPipeline {
 //            return input.getKV().getValue();
 //          }
 //        }))
-                .apply("ExtractMessageValue", MapElements.into(TypeDescriptors.strings()).via(records -> records.getKV().getValue()))
+//                .apply("ExtractMessageValue", MapElements.into(TypeDescriptors.strings()).via(records -> records.getKV().getValue()))
                 .apply("ParseJsonToTableRow", ParDo.of(new JsonToTableRowFn()))
                 .apply(
                         "WriteToBigQuery",
