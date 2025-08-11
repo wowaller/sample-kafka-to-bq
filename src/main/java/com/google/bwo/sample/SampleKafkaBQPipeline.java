@@ -152,6 +152,25 @@ public class SampleKafkaBQPipeline {
         // Build the pipeline.
         Pipeline pipeline = Pipeline.create(options);
 
+        int shades = options.getFileShades();
+        BigQueryIO.Write<TableRow> bqIo = BigQueryIO.writeTableRows()
+                .to(options.getBqOutputTable())
+                .withSchema(bqSchema)
+                .withCreateDisposition(CreateDisposition.CREATE_IF_NEEDED)
+                .withWriteDisposition(WriteDisposition.WRITE_APPEND)
+                .withMethod(
+                        options.getUseFileLoads()?
+                                BigQueryIO.Write.Method.FILE_LOADS:BigQueryIO.Write.Method.STORAGE_WRITE_API
+                )
+                .withAutoSharding()
+                .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
+                .withCustomGcsTempLocation(options.getGcsTempLocation());
+        if(shades == 0) {
+            bqIo = bqIo.withAutoSharding();
+        } else {
+            bqIo = bqIo.withNumFileShards(16);
+        }
+
         pipeline
                 .apply(
                         "ReadFromKafka",
@@ -176,18 +195,7 @@ public class SampleKafkaBQPipeline {
                 .apply("ParseJsonToTableRow", ParDo.of(new JsonToTableRowFn()))
                 .apply(
                         "WriteToBigQuery",
-                        BigQueryIO.writeTableRows()
-                                .to(options.getBqOutputTable())
-                                .withSchema(bqSchema)
-                                .withCreateDisposition(CreateDisposition.CREATE_IF_NEEDED)
-                                .withWriteDisposition(WriteDisposition.WRITE_APPEND)
-                                .withMethod(
-                                        options.getUseFileLoads()?
-                                                BigQueryIO.Write.Method.FILE_LOADS:BigQueryIO.Write.Method.STORAGE_WRITE_API
-                                )
-                                .withAutoSharding()
-                                .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
-                                .withCustomGcsTempLocation(options.getGcsTempLocation())
+                        bqIo
                 );
 
         pipeline.run();
