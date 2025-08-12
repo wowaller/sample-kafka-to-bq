@@ -162,7 +162,6 @@ public class SampleKafkaBQPipeline {
                         options.getUseFileLoads()?
                                 BigQueryIO.Write.Method.FILE_LOADS:BigQueryIO.Write.Method.STORAGE_WRITE_API
                 )
-                .withAutoSharding()
                 .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
                 .withCustomGcsTempLocation(options.getGcsTempLocation());
         if(shades == 0) {
