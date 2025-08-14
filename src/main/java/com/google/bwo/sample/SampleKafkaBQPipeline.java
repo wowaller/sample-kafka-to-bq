@@ -9,15 +9,15 @@ import com.google.gson.JsonSyntaxException;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
+import java.nio.channels.Channels;
+import java.nio.channels.ReadableByteChannel;
+import java.util.*;
 import java.util.stream.Collectors;
 
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.DefaultCoder;
 import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
+import org.apache.beam.sdk.io.FileSystems;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.CreateDisposition;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.WriteDisposition;
@@ -25,19 +25,27 @@ import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.io.kafka.KafkaRecord;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.*;
-import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.TypeDescriptors;
+import org.apache.beam.sdk.util.StreamUtils;
 import org.apache.kafka.common.serialization.LongDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class SampleKafkaBQPipeline {
     private static final Logger LOG = LoggerFactory.getLogger(SampleKafkaBQPipeline.class);
+
+    private static final String BIGQUERY_SCHEMA = "BigQuery Schema";
+    private static final String NAME = "name";
+    private static final String TYPE = "type";
+    private static final String MODE = "mode";
+    private static final String RECORD_TYPE = "RECORD";
+    private static final String FIELDS_ENTRY = "fields";
 
     // A POJO (Plain Old Java Object) to represent the structure of your JSON log messages.
     // This makes parsing type-safe and easy to manage.
@@ -61,11 +69,80 @@ public class SampleKafkaBQPipeline {
         Long latency_ms;
     }
 
+    /** Parse BigQuery schema from a Json file. */
+    private static TableSchema parseSchema(String jsonPath) {
+        TableSchema tableSchema = new TableSchema();
+        List<TableFieldSchema> fields = new ArrayList<>();
+
+        JSONObject jsonSchema = parseJson(jsonPath);
+
+        JSONArray bqSchemaJsonArray = jsonSchema.getJSONArray(BIGQUERY_SCHEMA);
+
+        for (int i = 0; i < bqSchemaJsonArray.length(); i++) {
+            JSONObject inputField = bqSchemaJsonArray.getJSONObject(i);
+            fields.add(convertToTableFieldSchema(inputField));
+        }
+        tableSchema.setFields(fields);
+
+        return tableSchema;
+    }
+
+    /**
+     * Parses a JSON file and returns a JSONObject containing the necessary source, sink, and schema
+     * information.
+     *
+     * @param pathToJson the JSON file location so we can download and parse it
+     * @return the parsed JSONObject
+     */
+    private static JSONObject parseJson(String pathToJson) {
+        try {
+            // accessing GCS needs to be done after the pipeline create call, otherwise FileSystems
+            // doesn't know about GCS.
+            ReadableByteChannel readableByteChannel =
+                    FileSystems.open(FileSystems.matchNewResource(pathToJson, false));
+            String json =
+                    new String(
+                            StreamUtils.getBytesWithoutClosing(Channels.newInputStream(readableByteChannel)));
+            return new JSONObject(json);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Convert a JSONObject from the Schema JSON to a TableFieldSchema. In case of RECORD, it handles
+     * it recursively.
+     *
+     * @param inputField Input field to convert.
+     * @return TableFieldSchema instance to populate the schema.
+     */
+    private static TableFieldSchema convertToTableFieldSchema(JSONObject inputField) {
+        TableFieldSchema field =
+                new TableFieldSchema()
+                        .setName(inputField.getString(NAME))
+                        .setType(inputField.getString(TYPE));
+
+        if (inputField.has(MODE)) {
+            field.setMode(inputField.getString(MODE));
+        }
+
+        if (inputField.getString(TYPE) != null && inputField.getString(TYPE).equals(RECORD_TYPE)) {
+            List<TableFieldSchema> nestedFields = new ArrayList<>();
+            JSONArray fieldsArr = inputField.getJSONArray(FIELDS_ENTRY);
+            for (int i = 0; i < fieldsArr.length(); i++) {
+                JSONObject nestedJSON = fieldsArr.getJSONObject(i);
+                nestedFields.add(convertToTableFieldSchema(nestedJSON));
+            }
+            field.setFields(nestedFields);
+        }
+
+        return field;
+    }
+
     // A DoFn to parse JSON strings into TableRow objects for BigQuery.
     public static class JsonToTableRowFn extends DoFn<KafkaRecord<Long, String>, TableRow> {
         private transient Gson gson;
-        // Formatter for BigQuery DATETIME format (YYYY-MM-DD'T'HH:MI:SS.ssssss).
-        // Using the 'T' separator is the canonical format for BigQuery.
+        // Formatter for BigQuery DATETIME format (YYYY-MM-DD HH:MM:SS[.SSSSSS]).
         private static final DateTimeFormatter BQ_DATETIME_FORMATTER = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss");
         @Setup
         public void setup() {
@@ -101,9 +178,9 @@ public class SampleKafkaBQPipeline {
         }
     }
 
+
+
     public static void main(String[] args) {
-        // Parse the pipeline options passed into the application. Example:
-        //   --bootstrapServer=host:port --topic1=my-topic --bqOutputTable=project:dataset.table
         // For more information, see https://beam.apache.org/documentation/programming-guide/#configuring-pipeline-options
         PipelineOptionsFactory.register(ExamplePipelineOptions.class);
         ExamplePipelineOptions options = PipelineOptionsFactory.fromArgs(args)
@@ -113,15 +190,14 @@ public class SampleKafkaBQPipeline {
         // Define the BigQuery table schema to match your target table.
         TableSchema bqSchema =
                 new TableSchema()
-                        .setFields(
-                                List.of(
-                                        new TableFieldSchema().setName("timestamp").setType("DATETIME"),
-                                        new TableFieldSchema().setName("severity").setType("STRING"),
-                                        new TableFieldSchema().setName("service").setType("STRING"),
-                                        new TableFieldSchema().setName("message").setType("STRING"),
-                                        new TableFieldSchema().setName("trace_id").setType("STRING"),
-                                        new TableFieldSchema().setName("request_details").setType("STRING"),
-                                        new TableFieldSchema().setName("latency_ms").setType("INTEGER")));
+                    .setFields(List.of(
+                        new TableFieldSchema().setName("timestamp").setType("DATETIME"),
+                        new TableFieldSchema().setName("severity").setType("STRING"),
+                        new TableFieldSchema().setName("service").setType("STRING"),
+                        new TableFieldSchema().setName("message").setType("STRING"),
+                        new TableFieldSchema().setName("trace_id").setType("STRING"),
+                        new TableFieldSchema().setName("request_details").setType("STRING"),
+                        new TableFieldSchema().setName("latency_ms").setType("INTEGER")));
 
         Map<String, Object> mapFromProps = new HashMap<>();
         // Load extra properties
@@ -164,10 +240,12 @@ public class SampleKafkaBQPipeline {
                 )
                 .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
                 .withCustomGcsTempLocation(options.getGcsTempLocation());
+
+        // Enable auto sharding by default.
         if(shades == 0) {
             bqIo = bqIo.withAutoSharding();
         } else {
-            bqIo = bqIo.withNumFileShards(16);
+            bqIo = bqIo.withNumFileShards(shades);
         }
 
         pipeline
@@ -178,19 +256,8 @@ public class SampleKafkaBQPipeline {
                                 .withTopics(List.of(options.getTopic()))
                                 .withKeyDeserializer(LongDeserializer.class)
                                 .withValueDeserializer(StringDeserializer.class)
-                                // withMaxReadTime makes this a bounded job for testing. Remove for a streaming pipeline.
-//                    .withMaxReadTime(Duration.standardSeconds(60))
                                 .withConsumerConfigUpdates(mapFromProps)
                 )
-                // We only need the message value (the JSON string).
-//        .apply("ExtractMessageValue", MapElements.via(new SimpleFunction<KafkaRecord<Long, String>, String>() {
-//          @Override
-//          public String apply(KafkaRecord<Long, String> input) {
-//            // Return the value part of the key-value pair.
-//            return input.getKV().getValue();
-//          }
-//        }))
-//                .apply("ExtractMessageValue", MapElements.into(TypeDescriptors.strings()).via(records -> records.getKV().getValue()))
                 .apply("ParseJsonToTableRow", ParDo.of(new JsonToTableRowFn()))
                 .apply(
                         "WriteToBigQuery",
