@@ -239,10 +239,10 @@ public class TestUpsertKafkaBQPipeline {
                 .withCreateDisposition(CreateDisposition.CREATE_NEVER)
                 .withWriteDisposition(WriteDisposition.WRITE_APPEND)
                 .withMethod(BigQueryIO.Write.Method.STORAGE_WRITE_API)
+                .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
                 .withRowMutationInformationFn(row ->
                         RowMutationInformation.of(
                                 RowMutationInformation.MutationType.UPSERT, Long.toHexString(System.currentTimeMillis())))
-                .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
                 .withCustomGcsTempLocation(options.getGcsTempLocation());
 
 
