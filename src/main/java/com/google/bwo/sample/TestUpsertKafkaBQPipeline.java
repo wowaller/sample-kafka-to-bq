@@ -238,11 +238,11 @@ public class TestUpsertKafkaBQPipeline {
                 .withPrimaryKey(List.of("trace_id"))
                 .withCreateDisposition(CreateDisposition.CREATE_NEVER)
                 .withWriteDisposition(WriteDisposition.WRITE_APPEND)
-                .withMethod(BigQueryIO.Write.Method.STORAGE_WRITE_API)
-                .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
+                .withMethod(BigQueryIO.Write.Method.STORAGE_API_AT_LEAST_ONCE)
                 .withRowMutationInformationFn(row ->
                         RowMutationInformation.of(
                                 RowMutationInformation.MutationType.UPSERT, Long.toHexString(System.currentTimeMillis())))
+//                .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
                 .withCustomGcsTempLocation(options.getGcsTempLocation());
 
 
