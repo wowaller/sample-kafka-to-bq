@@ -235,13 +235,9 @@ public class TestUpsertKafkaBQPipeline {
                 .withSchema(bqSchema)
                 .withCreateDisposition(CreateDisposition.CREATE_IF_NEEDED)
                 .withWriteDisposition(WriteDisposition.WRITE_APPEND)
-                .withMethod(
-                        options.getUseFileLoads()?
-                                BigQueryIO.Write.Method.FILE_LOADS:BigQueryIO.Write.Method.STORAGE_WRITE_API
-                )
                 .withMethod(BigQueryIO.Write.Method.STORAGE_API_AT_LEAST_ONCE)
                 .withRowMutationInformationFn(row -> RowMutationInformation.of(RowMutationInformation.MutationType.UPSERT, Long.toHexString(System.currentTimeMillis())))
-                .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
+//                .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
                 .withCustomGcsTempLocation(options.getGcsTempLocation());
 
         // Enable auto sharding by default.
