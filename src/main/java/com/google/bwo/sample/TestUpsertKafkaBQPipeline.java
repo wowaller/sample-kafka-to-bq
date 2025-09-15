@@ -233,7 +233,6 @@ public class TestUpsertKafkaBQPipeline {
         BigQueryIO.Write<TableRow> bqIo = BigQueryIO.writeTableRows()
                 .to(options.getBqOutputTable())
                 .withSchema(bqSchema)
-                .withCreateDisposition(CreateDisposition.CREATE_IF_NEEDED)
                 .withWriteDisposition(WriteDisposition.WRITE_APPEND)
                 .withMethod(BigQueryIO.Write.Method.STORAGE_API_AT_LEAST_ONCE)
                 .withRowMutationInformationFn(row -> RowMutationInformation.of(RowMutationInformation.MutationType.UPSERT, Long.toHexString(System.currentTimeMillis())))
