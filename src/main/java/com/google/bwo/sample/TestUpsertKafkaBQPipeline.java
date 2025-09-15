@@ -1,5 +1,6 @@
 package com.google.bwo.sample;
 
+import com.google.api.services.bigquery.model.TableConstraints;
 import com.google.api.services.bigquery.model.TableFieldSchema;
 import com.google.api.services.bigquery.model.TableRow;
 import com.google.api.services.bigquery.model.TableSchema;
@@ -198,7 +199,8 @@ public class TestUpsertKafkaBQPipeline {
                         new TableFieldSchema().setName("message").setType("STRING"),
                         new TableFieldSchema().setName("trace_id").setType("STRING"),
                         new TableFieldSchema().setName("request_details").setType("STRING"),
-                        new TableFieldSchema().setName("latency_ms").setType("INTEGER")));
+                        new TableFieldSchema().setName("latency_ms").setType("INTEGER")))
+                ;
 
         Map<String, Object> mapFromProps = new HashMap<>();
         // Load extra properties
@@ -233,6 +235,7 @@ public class TestUpsertKafkaBQPipeline {
         BigQueryIO.Write<TableRow> bqIo = BigQueryIO.writeTableRows()
                 .to(options.getBqOutputTable())
                 .withSchema(bqSchema)
+                .withPrimaryKey(List.of("trace_id"))
                 .withCreateDisposition(CreateDisposition.CREATE_NEVER)
                 .withWriteDisposition(WriteDisposition.WRITE_APPEND)
                 .withMethod(BigQueryIO.Write.Method.STORAGE_API_AT_LEAST_ONCE)
