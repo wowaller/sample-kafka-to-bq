@@ -5,15 +5,6 @@ import com.google.api.services.bigquery.model.TableRow;
 import com.google.api.services.bigquery.model.TableSchema;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
-
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.channels.Channels;
-import java.nio.channels.ReadableByteChannel;
-import java.util.*;
-import java.util.stream.Collectors;
-
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.DefaultCoder;
 import org.apache.beam.sdk.extensions.avro.coders.AvroCoder;
@@ -21,10 +12,12 @@ import org.apache.beam.sdk.io.FileSystems;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.CreateDisposition;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.WriteDisposition;
+import org.apache.beam.sdk.io.gcp.bigquery.RowMutationInformation;
 import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.io.kafka.KafkaRecord;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.transforms.*;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.util.StreamUtils;
 import org.apache.kafka.common.serialization.LongDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -37,8 +30,16 @@ import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class SampleKafkaBQPipeline {
-    private static final Logger LOG = LoggerFactory.getLogger(SampleKafkaBQPipeline.class);
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.channels.Channels;
+import java.nio.channels.ReadableByteChannel;
+import java.util.*;
+import java.util.stream.Collectors;
+
+public class TestUpsertKafkaBQPipeline {
+    private static final Logger LOG = LoggerFactory.getLogger(TestUpsertKafkaBQPipeline.class);
 
     private static final String BIGQUERY_SCHEMA = "BigQuery Schema";
     private static final String NAME = "name";
@@ -238,6 +239,8 @@ public class SampleKafkaBQPipeline {
                         options.getUseFileLoads()?
                                 BigQueryIO.Write.Method.FILE_LOADS:BigQueryIO.Write.Method.STORAGE_WRITE_API
                 )
+                .withMethod(BigQueryIO.Write.Method.STORAGE_API_AT_LEAST_ONCE)
+                .withRowMutationInformationFn(row -> RowMutationInformation.of(RowMutationInformation.MutationType.UPSERT, Long.toHexString(System.currentTimeMillis())))
                 .withTriggeringFrequency(Duration.standardSeconds(options.getTriggeringFrequency()))
                 .withCustomGcsTempLocation(options.getGcsTempLocation());
 
