@@ -163,7 +163,7 @@ public class SampleKafkaBQPipeline {
                     TableRow row =
                             new TableRow()
                                     .set("timestamp", formattedTimestamp)
-                                    .set("severity", entry.severity)
+                                        .set("severity", entry.severity)
                                     .set("service", entry.service)
                                     .set("message", entry.message)
                                     .set("trace_id", entry.trace_id)

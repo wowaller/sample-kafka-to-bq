@@ -299,6 +299,12 @@
             <artifactId>beam-sdks-java-extensions-google-cloud-platform-core</artifactId>
         </dependency>
 
+        <!-- Adds a dependency on the Beam SDK for SQL. -->
+        <dependency>
+            <groupId>org.apache.beam</groupId>
+            <artifactId>beam-sdks-java-extensions-sql</artifactId>
+        </dependency>
+        
         <!-- Adds a dependency on the Beam Google Cloud Platform IO module. -->
         <dependency>
             <groupId>org.apache.beam</groupId>
