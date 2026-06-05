@@ -86,20 +86,22 @@ java -jar ./target/test-kafka2bq-bundled-1.0.0.jar \
 
 ---
 
-## Schema Evolution Samples
+## Schema Change & Ingestion Samples
 
-This repository contains verified, production-ready implementation patterns for automatically updating the BigQuery destination table schema when upstream schema drift occurs, guaranteeing **Zero Data Loss**.
+This repository contains verified, production-ready implementation patterns for handling schema changes, upstream schema drift, and dynamic nested fields when streaming into BigQuery, guaranteeing **Zero Data Loss**.
 
 For detailed architecture descriptions, comparison tables, and implementation notes, please reference the guides:
-*   [English Guide: BigQuery Schema Evolution Walkthrough](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-evolve-sample/docs/bq_schema_update_guide.md)
-*   [中文指南: BigQuery 表结构演进与零丢失写入设计](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-evolve-sample/docs/bq_schema_update_guide_cn.md)
+*   [English Guide: BigQuery Schema Evolution Walkthrough](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-change-sample/docs/bq_schema_update_guide.md)
+*   [中文指南: BigQuery 表结构演进与零丢失写入设计](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-change-sample/docs/bq_schema_update_guide_cn.md)
 
 ### Folder Structure Overview
-*   [schema-evolve-sample/docs/](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-evolve-sample/docs): Documentation guides.
-*   [schema-evolve-sample/python/](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-evolve-sample/python):
-    *   `demo_tagged_healer.py`: Advanced multi-worker Python pipeline utilizing tagged multi-output streams to partition normal rows from drifted rows, buffer drifted records safely to Cloud Storage (GCS), serialize schema updates, and load GCS files via batch load jobs after update finalization (`WaitOn`).
-    *   `demo_dlq_streaming.py`: Basic DLQ schema healer that routes write failures to a single worker in memory to run table schema updates and retries rows via inline JSON Load Jobs.
-*   [schema-evolve-sample/java/](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-evolve-sample/java):
+*   [schema-change-sample/docs/](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-change-sample/docs): Documentation guides.
+*   [schema-change-sample/python/](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-change-sample/python):
+    *   `demo_json_ingestion.py`: **(Pattern 1 - Highly Recommended)** Pipeline mapping all dynamic/drifted fields into a single static native BigQuery `JSON` column, bypassing any schema changes or writes DLQ.
+    *   `demo_tagged_healer.py`: (Pattern 3) Advanced multi-worker Python pipeline utilizing tagged multi-output streams to partition normal rows from drifted rows, buffer drifted records safely to Cloud Storage (GCS), serialize schema updates, and load GCS files via batch load jobs after update finalization (`WaitOn`).
+    *   `demo_dlq_streaming.py`: (Pattern 2) Basic DLQ schema healer that routes write failures to a single worker in memory to run table schema updates and retries rows via inline JSON Load Jobs.
+*   [schema-change-sample/java/](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-change-sample/java):
+    *   `JsonApp.java`: **(Pattern 1 - Highly Recommended)** Java pipeline utilizing the Storage Write API to map dynamic fields into a native BigQuery `JSON` column.
     *   `App.java`: Java Apache Beam pipeline utilizing the Storage Write API with failures captured from `getFailedStorageApiInserts()`, batched in 15-second windows, healed sequentially via the BigQuery Client API, and loaded via BigQuery File Loads.
 
 ### Relocated JavaScript UDFs
