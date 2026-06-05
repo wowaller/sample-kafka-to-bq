@@ -371,14 +371,14 @@ If you must preserve the exact schema and column name:
 
 If your streaming pipeline needs to handle a constantly evolving message structure, here are the three main architectural patterns implemented in production:
 
-### Pattern 1: Native BigQuery `JSON` Column (Highly Recommended)
+### Native BigQuery `JSON` Column (Alternative dynamic schema approach)
 *   **Implementation:** Define the destination table schema once with the nested field defined as type `JSON`. Pass raw Python dictionaries/lists directly to this column in the pipeline.
 *   **How it handles updates:** Completely transparent. If the incoming Pub/Sub message contains new nested fields, they are loaded directly into the `JSON` column without any pipeline restarts or table updates.
 *   **Querying:** Consumers query the data using BQ JSON functions: `JSON_VALUE(SENDER_JSON.new_field)`.
 *   **Pros:** Zero downtime, zero code changes, zero operational overhead.
 *   **Cons:** No strict type enforcement on write; schema validation happens on-read.
 
-### Pattern 2: Dead-Letter Queue (DLQ) with Schema Auto-Healer (Automated Dynamic Schema Updates)
+### Pattern 1: Dead-Letter Queue (DLQ) with Schema Auto-Healer (Automated Dynamic Schema Updates)
 *   **Implementation:** Define a strict schema in `WriteToBigQuery`. Capture write failures using the `.failed_rows` attribute of the write result, process the failed rows to detect new fields, update the BigQuery table schema using the BigQuery Client Library, and re-ingest the failed rows.
 *   **Pros:** Automates schema updates without pipeline restarts while maintaining typed column structures inside BigQuery.
 *   **Cons:** High complexity; introduces latency for rows with new fields.
@@ -522,152 +522,7 @@ If you require custom processing logic and must use Dataflow, you can query the 
 
 ---
 
-## Zero-Data-Loss Schema Evolution in Java (Storage Write API & DLQ)
 
-When using the Java SDK with the Storage Write API, enabling `.withAutoSchemaUpdate(true)` and `.ignoreUnknownValues()` allows the pipeline to auto-evolve the table schema. However, there is a subtle but critical data-loss caveat:
-
-> [!WARNING]
-> **Transient Data Loss Window:**
-> When a row with a new field is ingested, BigQuery's Storage Write API client handles schema update asynchronously. While this update propagates across BigQuery's ingestion workers, the client relies on `ignoreUnknownValues()` to bypass errors. 
-> During this propagation window (which can take several seconds to minutes), any rows containing the new fields will succeed, but **the values of those new columns will be silently dropped and permanently lost**.
-
-To achieve a **zero-data-loss** pipeline in Java, you should instead implement the **DLQ Schema Healer Pattern** in Java:
-
-1.  **Do NOT use `.ignoreUnknownValues()`:** This forces the Storage Write API to fail writes containing unknown fields.
-2.  **Route Failures to DLQ:** Capture write failures from `WriteResult.getFailedStorageApiInserts()`.
-3.  **Batch & Heal:** Group the failed inserts, extract the new columns, update the BigQuery table schema using the Java BigQuery client library, and re-ingest the rows.
-
-### Java Zero-Data-Loss Pipeline Example
-
-```java
-package com.demo;
-
-import com.google.api.services.bigquery.model.TableFieldSchema;
-import com.google.api.services.bigquery.model.TableRow;
-import com.google.api.services.bigquery.model.TableSchema;
-import com.google.cloud.bigquery.*;
-import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
-import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.CreateDisposition;
-import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.Method;
-import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.WriteDisposition;
-import org.apache.beam.sdk.io.gcp.bigquery.BigQueryStorageWriteApiSetterHelper;
-import org.apache.beam.sdk.io.gcp.bigquery.BigQueryStorageApiInsertError;
-import org.apache.beam.sdk.io.gcp.bigquery.WriteResult;
-import org.apache.beam.sdk.transforms.*;
-import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PCollection;
-import org.joda.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-
-public class ZeroLossPipeline {
-
-    // 1. Healer DoFn that runs when writes fail
-    public static class JavaSchemaHealerDoFn extends DoFn<Iterable<TableRow>, TableRow> {
-        private final String projectId;
-        private final String datasetId;
-        private final String tableName;
-        private transient BigQuery bigquery;
-
-        public JavaSchemaHealerDoFn(String projectId, String datasetId, String tableName) {
-            this.projectId = projectId;
-            this.datasetId = datasetId;
-            this.tableName = tableName;
-        }
-
-        @Setup
-        public void setup() {
-            this.bigquery = BigQueryOptions.newBuilder().setProjectId(projectId).build().getService();
-        }
-
-        @ProcessElement
-        public void processElement(@Element Iterable<TableRow> failedRows, OutputReceiver<TableRow> receiver) {
-            TableId tableId = TableId.of(datasetId, tableName);
-            Table table = bigquery.getTable(tableId);
-            
-            // Collect all unique fields from the failed rows
-            List<TableFieldSchema> newFields = new ArrayList<>();
-            Schema currentSchema = table.getDefinition().getSchema();
-            
-            for (TableRow row : failedRows) {
-                for (String key : row.keySet()) {
-                    if (currentSchema.getFields().get(key) == null) {
-                        // Detect and define new column (default to STRING for simplicity)
-                        newFields.add(new TableFieldSchema().setName(key).setType("STRING").setMode("NULLABLE"));
-                    }
-                }
-            }
-
-            // Perform Schema Update if new columns are found
-            if (!newFields.size() == 0) {
-                List<Field> fieldsList = new ArrayList<>(currentSchema.getFields());
-                for (TableFieldSchema newField : newFields) {
-                    fieldsList.add(Field.of(newField.getName(), StandardSQLTypeName.valueOf(newField.getType())));
-                }
-                Table updatedTable = table.toBuilder()
-                    .setDefinition(StandardTableDefinition.of(Schema.of(fieldsList)))
-                    .build();
-                bigquery.update(updatedTable);
-            }
-
-            // Output rows for re-ingestion via Load Job
-            for (TableRow row : failedRows) {
-                receiver.output(row);
-            }
-        }
-    }
-
-    public static void runPipeline(Pipeline p, String inputSub, String outputTableSpec) {
-        // Parse table details
-        String[] parts = outputTableSpec.split(":");
-        String project = parts[0];
-        String[] datasetTable = parts[1].split("\\.");
-        String dataset = datasetTable[0];
-        String table = datasetTable[1];
-
-        // 1. Attempt main pipeline write using Storage Write API
-        WriteResult writeResult = p
-            .apply("Read", PubsubIO.readStrings().fromSubscription(inputSub))
-            .apply("ParseJson", ParDo.of(new ParseJsonToTableRowFn()))
-            .apply("WriteStorageWriteApi", BigQueryIO.writeTableRows()
-                .to(outputTableSpec)
-                .withMethod(Method.STORAGE_WRITE_API)
-                .withCreateDisposition(CreateDisposition.CREATE_NEVER)
-                .withWriteDisposition(WriteDisposition.WRITE_APPEND)
-                .withTriggeringFrequency(Duration.standardSeconds(5))
-                // Note: ignoreUnknownValues is NOT set here
-            );
-
-        // 2. Capture and Batch Ingestion Failures
-        PCollection<TableRow> healedRows = writeResult.getFailedStorageApiInserts()
-            .apply("ExtractFailedRows", MapElements.into(TypeDescriptor.of(TableRow.class))
-                .via(BigQueryStorageApiInsertError::getRow))
-            // Key by table name to group
-            .apply("KeyByTableSpec", WithKeys.of(outputTableSpec))
-            // Batch failures into 15-second windows to avoid metadata rate limits
-            .apply("BatchFailures", GroupIntoBatches.<String, TableRow>ofSize(100)
-                .withMaxBufferingDuration(Duration.standardSeconds(15)))
-            .apply("ExtractValues", Values.create())
-            // Perform schema updates and output rows for re-ingestion
-            .apply("HealSchema", ParDo.of(new JavaSchemaHealerDoFn(project, dataset, table)));
-
-        // 3. Re-ingest healed rows using BigQuery Load Jobs (FILE_LOADS)
-        // Load Jobs bypass the streaming worker cache and instantly write to the evolved schema.
-        healedRows.apply("ReIngestViaLoadJobs", BigQueryIO.writeTableRows()
-            .to(outputTableSpec)
-            .withMethod(Method.FILE_LOADS)
-            .withCreateDisposition(CreateDisposition.CREATE_NEVER)
-            .withWriteDisposition(WriteDisposition.WRITE_APPEND)
-            .withTriggeringFrequency(Duration.standardSeconds(15))
-        );
-
-        p.run();
-    }
-}
-```
-
----
 
 ## Python DLQ Healer with Single-Worker Schema Updates
 
@@ -816,7 +671,7 @@ This is the standard enterprise pattern for massive ingestion pipelines. Instead
 
 ---
 
-### Pattern 3: Tagged Multi-Output Ingestion with GCS Buffering & WaitOn (State-of-the-Art Production Design)
+### Pattern 2: Tagged Multi-Output Ingestion with GCS Buffering & WaitOn (State-of-the-Art Production Design)
 
 This is the most advanced and efficient architecture for handling schema evolution in high-throughput pipelines. It divides ingestion into a **Fast Path** (for normal rows) and a **Safe Path** (for drifted rows), ensuring zero data loss and minimizing Dataflow worker resource usage.
 
@@ -1133,7 +988,7 @@ If you are dealing with mutable streams where record order is critical, you must
 
 To assist in choosing the correct ingestion architecture, use the following comparison of the key schema-update strategies:
 
-| Dimension / Metric | Native JSON Column (Pattern 1) | DLQ Healer (Pattern 2) | Tagged GCS Buffer & WaitOn (Pattern 3) |
+| Dimension / Metric | Native JSON Column | DLQ Healer (Pattern 1) | Tagged GCS Buffer & WaitOn (Pattern 2) |
 | :--- | :--- | :--- | :--- |
 | **Data Loss Prevention** |   **Zero Data Loss**. Schema-on-read ensures all fields are preserved. |   **Zero Data Loss**. Catches failures and retries. |   **Zero Data Loss**. Safe staging prior to table write. |
 | **Max Scale Throughput** |   **High**. Standard BQ streaming writes. | ⚠️ **Medium**. OOM risk on worker memory if failure rate is very high. |   **High**. Parallel GCS writes and offloaded BQ file loads. |

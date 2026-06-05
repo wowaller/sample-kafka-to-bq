@@ -48,43 +48,7 @@
 
 ---
 
-## 模式 2：Java Storage Write API 的零丢失架构
-
-Java SDK 中的 `withAutoSchemaUpdate(true)` 必须与 `ignoreUnknownValues()` 一起使用才能通过部署校验，但此时未知字段会在延迟同步期间被默默丢弃。
-
-要实现零丢失，Java 管道必须取消 `ignoreUnknownValues()`，并利用 DLQ 捕获错误：
-
-```java
-// 1. 主写入流不配置 ignoreUnknownValues()
-WriteResult writeResult = pipeline
-    .apply("Read", PubsubIO.readStrings().fromSubscription(inputSub))
-    .apply("WriteStorageWriteApi", BigQueryIO.writeTableRows()
-        .to(outputTableSpec)
-        .withMethod(Method.STORAGE_WRITE_API)
-        .withTriggeringFrequency(Duration.standardSeconds(5))
-    );
-
-// 2. 捕获并批处理失败的 Storage API 插入
-PCollection<TableRow> healedRows = writeResult.getFailedStorageApiInserts()
-    .apply("ExtractFailedRows", MapElements.into(TypeDescriptor.of(TableRow.class))
-        .via(BigQueryStorageApiInsertError::getRow))
-    .apply("KeyByTableSpec", WithKeys.of(outputTableSpec))
-    .apply("BatchFailures", GroupIntoBatches.<String, TableRow>ofSize(100)
-        .withMaxBufferingDuration(Duration.standardSeconds(15)))
-    .apply("ExtractValues", Values.create())
-    .apply("HealSchema", ParDo.of(new JavaSchemaHealerDoFn(project, dataset, table)));
-
-// 3. 使用 FILE_LOADS 批量作业重写到 evolved 模式中
-healedRows.apply("ReIngestViaLoadJobs", BigQueryIO.writeTableRows()
-    .to(outputTableSpec)
-    .withMethod(Method.FILE_LOADS)
-    .withTriggeringFrequency(Duration.standardSeconds(15))
-);
-```
-
----
-
-## 模式 3：基于 GCS 缓冲与 WaitOn 延迟加载的双通道架构（高吞吐推荐）
+## 模式 2：基于 GCS 缓冲与 WaitOn 延迟加载的双通道架构（高吞吐推荐）
 
 当单表的数据写入吞吐量达到**每秒数万条以上**时，一旦出现字段漂移，短时间内会产生大量失败行。如果把失败的数据全部缓冲在内存中会造成 Worker 节点内存溢出 (OOM)。
 
@@ -388,7 +352,7 @@ if __name__ == '__main__':
 
 在选择具体的技术栈与写入策略时，可参考以下维度的考量指南：
 
-| 评价指标 / 特性 | 死信队列修复模式 (模式 1 / 模式 2) | GCS 动态双通道模式 (模式 3) |
+| 评价指标 / 特性 | 死信队列修复模式 (模式 1) | GCS 动态双通道模式 (模式 2) |
 | :--- | :--- | :--- |
 | **数据防丢保障 (Data Loss)** |   **零丢失**。依靠捕获未知键错误，通过批作业追加到表中。 |   **零丢失**。数据在确认表模式更新前一直在 GCS 暂存，极为可靠。 |
 | **支持 of 流式吞吐上限** | ⚠️ **中等**。如果在爆发期出现海量未知行，内存缓冲会导致 Worker 发生 OOM。 |   **极高**。GCS 缓冲完全免去了内存等待开销，由 BigQuery 自带的分布式批处理加载。 |
