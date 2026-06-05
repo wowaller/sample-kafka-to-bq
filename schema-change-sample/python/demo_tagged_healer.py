@@ -17,20 +17,20 @@ SCHEMA_UPDATE_TAG = 'schema_updates'
 
 class PreWriteInspectorDoFn(beam.DoFn):
     """
-    DoFn that inspects incoming elements against a local schema cache.
-    Normal rows (matching cache) are sent directly to the fast path.
-    Drifted rows are routed to the GCS staging area and emit a schema update event.
+    DoFn that inspects incoming elements against compile-time and run-time schemas.
+    Normal rows (matching compile-time cache) are sent directly to the fast path.
+    Drifted rows are routed to GCS staging (Safe Path), with schema updates triggered as needed.
     """
-    def __init__(self, project_id, dataset_id, table_name):
+    def __init__(self, project_id, dataset_id, table_name, compile_time_schema):
         self.project_id = project_id
         self.dataset_id = dataset_id
         self.table_name = table_name
         self.table_ref = f"{project_id}.{dataset_id}.{table_name}"
+        self.compile_time_schema = {f.lower() for f in compile_time_schema}
         self.cache = set()
         self.client = None
 
     def setup(self):
-        # Fetch the table schema from BQ once on worker initialization to pre-warm the cache
         self.client = bigquery.Client(project=self.project_id)
         try:
             table = self.client.get_table(self.table_ref)
@@ -48,33 +48,36 @@ class PreWriteInspectorDoFn(beam.DoFn):
             return
 
         element_keys = {k.lower() for k in element.keys()}
-        missing_keys = element_keys - self.cache
+        
+        # Check if the row matches the static schema compiled into WriteToBigQuery
+        drifted_from_compile_time = element_keys - self.compile_time_schema
 
-        if not missing_keys:
-            # Fast Path - all keys are in the cache
+        if not drifted_from_compile_time:
+            # Fast Path - all keys fit the compile-time schema of the writer
             yield beam.pvalue.TaggedOutput(NORMAL_TAG, element)
             return
 
-        # Double-Check BQ Table (another worker might have updated the schema already)
-        try:
-            table = self.client.get_table(self.table_ref)
-            self.cache = {field.name.lower() for field in table.schema}
-            real_missing_keys = element_keys - self.cache
-        except Exception as e:
-            logging.error(f"[Inspector] Failed to query BQ schema: {e}")
-            real_missing_keys = missing_keys
+        # Safe Path - elements contain fields not writable by static STORAGE_WRITE_API.
+        # Must write to GCS staging first.
+        yield beam.pvalue.TaggedOutput(DRIFTED_TAG, element)
 
-        if not real_missing_keys:
-            # Table has been updated in the meantime, route to fast path
-            yield beam.pvalue.TaggedOutput(NORMAL_TAG, element)
-        else:
-            # Schema drift detected! Route row to GCS staging
-            logging.info(f"[Inspector] Schema drift detected! Missing keys: {real_missing_keys}. Routing row to GCS.")
-            yield beam.pvalue.TaggedOutput(DRIFTED_TAG, element)
-            
-            # Emit a schema update event for each missing key
-            for key in real_missing_keys:
-                yield beam.pvalue.TaggedOutput(SCHEMA_UPDATE_TAG, (self.table_ref, key))
+        # Decide if we need to emit a schema update DDL request
+        missing_in_bq = element_keys - self.cache
+        if missing_in_bq:
+            # Double check BQ table metadata in case another worker already updated it
+            try:
+                table = self.client.get_table(self.table_ref)
+                self.cache = {field.name.lower() for field in table.schema}
+                real_missing_keys = element_keys - self.cache
+            except Exception as e:
+                logging.error(f"[Inspector] Failed to query BQ schema: {e}")
+                real_missing_keys = missing_in_bq
+
+            if real_missing_keys:
+                logging.info(f"[Inspector] New columns detected: {real_missing_keys}. Emitting schema update request.")
+                for key in real_missing_keys:
+                    yield beam.pvalue.TaggedOutput(SCHEMA_UPDATE_TAG, (self.table_ref, key))
+
 
 
 class SchemaUpdaterDoFn(beam.DoFn):
@@ -164,6 +167,29 @@ def run():
 
     options = PipelineOptions(beam_args, save_main_session=True, streaming=True)
 
+    # Dynamic schema query for STORAGE_WRITE_API initialization
+    client = bigquery.Client(project=args.bq_project_id)
+    table_ref = f"{args.bq_project_id}.{args.dataset_id}.{args.table_name}"
+    try:
+        table = client.get_table(table_ref)
+        schema_fields = []
+        for field in table.schema:
+            schema_fields.append({
+                'name': field.name,
+                'type': field.field_type,
+                'mode': field.mode
+            })
+        bq_schema = {'fields': schema_fields}
+        logging.info(f"[PipelineSetup] Retrieved schema for STORAGE_WRITE_API: {bq_schema}")
+    except Exception as e:
+        logging.warning(f"[PipelineSetup] Could not fetch schema. Fallback to basic. Error: {e}")
+        bq_schema = {
+            'fields': [
+                {'name': 'ID', 'type': 'STRING', 'mode': 'REQUIRED'},
+                {'name': 'SENDER_NAME', 'type': 'STRING', 'mode': 'NULLABLE'}
+            ]
+        }
+
     with beam.Pipeline(options=options) as p:
         # Read from Pub/Sub
         messages = p | "ReadFromPubSub" >> beam.io.ReadFromPubSub(subscription=args.input_subscription)
@@ -172,7 +198,12 @@ def run():
         inspected = (
             messages
             | "DecodeAndInspect" >> beam.ParDo(
-                PreWriteInspectorDoFn(args.bq_project_id, args.dataset_id, args.table_name)
+                PreWriteInspectorDoFn(
+                    args.bq_project_id,
+                    args.dataset_id,
+                    args.table_name,
+                    [f['name'] for f in bq_schema['fields']]
+                )
             ).with_outputs(NORMAL_TAG, DRIFTED_TAG, SCHEMA_UPDATE_TAG)
         )
 
@@ -181,9 +212,10 @@ def run():
             inspected[NORMAL_TAG]
             | "WriteNormalToBQ" >> beam.io.WriteToBigQuery(
                 args.output_table,
+                schema=bq_schema,
                 create_disposition=beam.io.gcp.bigquery.BigQueryDisposition.CREATE_NEVER,
                 write_disposition=beam.io.gcp.bigquery.BigQueryDisposition.WRITE_APPEND,
-                method='STREAMING_INSERTS'
+                method='STORAGE_WRITE_API'
             )
         )
 

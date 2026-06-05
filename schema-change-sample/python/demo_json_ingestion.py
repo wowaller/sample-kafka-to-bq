@@ -28,8 +28,8 @@ def prepare_row_for_json_col(element_str):
             # Group any drifted/dynamic/nested fields into the metadata dictionary
             metadata[key] = value
 
-    # BigQuery JSON column accepts a dictionary directly (do not json.dumps serialize it!)
-    row['METADATA'] = metadata
+    # BigQuery JSON column expects a JSON-serialized string for Storage Write API / Streaming Inserts
+    row['METADATA'] = json.dumps(metadata)
     return row
 
 def run():
