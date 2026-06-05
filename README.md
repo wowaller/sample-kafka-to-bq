@@ -84,3 +84,25 @@ java -jar ./target/test-kafka2bq-bundled-1.0.0.jar \
 --dataflowServiceOptions: Use the enable_streaming_engine_resource_based_billing to optimize the billing. You can add more options but keep the enable_streaming_engine_resource_based_billing option for costs. Optional.
 ```
 
+---
+
+## Schema Evolution Samples
+
+This repository contains verified, production-ready implementation patterns for automatically updating the BigQuery destination table schema when upstream schema drift occurs, guaranteeing **Zero Data Loss**.
+
+For detailed architecture descriptions, comparison tables, and implementation notes, please reference the guides:
+*   [English Guide: BigQuery Schema Evolution Walkthrough](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-evolve-sample/docs/bq_schema_update_guide.md)
+*   [中文指南: BigQuery 表结构演进与零丢失写入设计](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-evolve-sample/docs/bq_schema_update_guide_cn.md)
+
+### Folder Structure Overview
+*   [schema-evolve-sample/docs/](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-evolve-sample/docs): Documentation guides.
+*   [schema-evolve-sample/python/](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-evolve-sample/python):
+    *   `demo_tagged_healer.py`: Advanced multi-worker Python pipeline utilizing tagged multi-output streams to partition normal rows from drifted rows, buffer drifted records safely to Cloud Storage (GCS), serialize schema updates, and load GCS files via batch load jobs after update finalization (`WaitOn`).
+    *   `demo_dlq_streaming.py`: Basic DLQ schema healer that routes write failures to a single worker in memory to run table schema updates and retries rows via inline JSON Load Jobs.
+*   [schema-evolve-sample/java/](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/schema-evolve-sample/java):
+    *   `App.java`: Java Apache Beam pipeline utilizing the Storage Write API with failures captured from `getFailedStorageApiInserts()`, batched in 15-second windows, healed sequentially via the BigQuery Client API, and loaded via BigQuery File Loads.
+
+### Relocated JavaScript UDFs
+All JavaScript UDF helpers and tests have been grouped under the [udf/](file:///usr/local/google/home/binggangwo/project/sample-kafka-to-bq/udf) folder at the project root.
+
+

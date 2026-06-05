@@ -1,0 +1,89 @@
+class DedupByUUIDWithTTL(beam.DoFn):
+    SEEN = ReadModifyWriteStateSpec('seen_uuid', BytesCoder())
+    EXPIRY_TIMER = TimerSpec('expiry_timer', TimeDomain.REAL_TIME)
+
+    def process(self,
+                element,
+                seen=beam.DoFn.StateParam(SEEN),
+                timer=beam.DoFn.TimerParam(EXPIRY_TIMER)):
+        key, row = element
+        if not seen.read():
+            seen.write(b'1')
+            timer.set(Timestamp.now() + Duration.of(300))   # 5分钟
+            yield row
+
+    @on_timer(EXPIRY_TIMER)
+    def expiry_timer(self, seen=beam.DoFn.StateParam(SEEN)):
+        seen.clear()
+
+
+def run():
+    pipeline_options = PipelineOptions(save_main_session=True)
+    pipeline_options.view_as(StandardOptions).streaming = True
+    options = pipeline_options.view_as(EventsPipelineOptions)
+
+    pipeline_options.view_as(WorkerOptions).max_num_workers = 1
+    pipeline_options.view_as(WorkerOptions).num_workers = 1
+
+    p = beam.Pipeline(options=pipeline_options)
+
+    parsed = (
+        p
+        | "ReadPubSub" >> beam.io.ReadFromPubSub(subscription=options.input_subscription)
+        | "AddDummyKey" >> beam.Map(lambda x: (None, x))
+        | "BatchForSerialization" >> beam.GroupIntoBatches(batch_size=1)
+        | "FlattenBatch" >> beam.FlatMap(lambda kv: kv[1])
+        | "ParseAndFlatten" >> beam.ParDo(
+            ParseAndFlattenDoFn(options.output_table, BUNDLE_ID_TO_TABLE)
+        ).with_outputs(
+            *TABLE_TO_TAG.values(), "dlq", "schema_registry"
+        )
+    )
+
+
+    for table_spec, tag_name in TABLE_TO_TAG.items():
+        pcoll = getattr(parsed, tag_name)
+
+        (
+            pcoll
+            | f"KeyByUUID_{tag_name}" >> beam.Map(
+                lambda row: (row.get("uuid", ""), row)
+            )
+            | f"DedupUUID_{tag_name}" >> beam.ParDo(DedupByUUIDWithTTL())
+            | f"Write_{tag_name}"
+            >> WriteToBigQuery(
+                table=table_spec,
+                schema=get_dynamic_schema(table_spec),
+                method=WriteToBigQuery.Method.FILE_LOADS,
+                create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+                write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+                triggering_frequency=120,
+                additional_bq_parameters={"ignoreUnknownValues": True},
+            )
+        )
+
+    (
+        parsed.dlq
+        | "WriteDLQ"
+        >> WriteToBigQuery(
+            table=options.dlq_table,
+            schema=DLQ_SCHEMA,
+            method=WriteToBigQuery.Method.STORAGE_WRITE_API,
+            create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+            write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+        )
+    )
+
+    (
+        parsed.schema_registry
+        | "WriteSchemaRegistry"
+        >> WriteToBigQuery(
+            table=options.schema_registry_table,
+            schema=SCHEMA_REGISTRY_SCHEMA,
+            method=WriteToBigQuery.Method.STORAGE_WRITE_API,
+            create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+            write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+        )
+    )
+
+    p.run().wait_until_finish()
