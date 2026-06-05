@@ -378,13 +378,7 @@ If your streaming pipeline needs to handle a constantly evolving message structu
 *   **Pros:** Zero downtime, zero code changes, zero operational overhead.
 *   **Cons:** No strict type enforcement on write; schema validation happens on-read.
 
-### Pattern 2: Schema Registry + Pipeline Redeployment (Customer's Current Method)
-*   **Implementation:** The pipeline reads schema specifications from an external Registry (e.g. Confluent Schema Registry or a database) during start-up using a function like `schema=get_dynamic_schema(table_spec)`.
-*   **How it handles updates:** When a new schema is published, the pipeline code or configuration is updated and the Dataflow streaming job is redeployed/updated using the `--update` flag.
-*   **Pros:** Enforces strict types inside BigQuery `RECORD` structures.
-*   **Cons:** Requires triggering a deployment workflow (Dataflow update job) whenever a schema evolves.
-
-### Pattern 3: Dead-Letter Queue (DLQ) with Schema Auto-Healer (Automated Dynamic Schema Updates)
+### Pattern 2: Dead-Letter Queue (DLQ) with Schema Auto-Healer (Automated Dynamic Schema Updates)
 *   **Implementation:** Define a strict schema in `WriteToBigQuery`. Capture write failures using the `.failed_rows` attribute of the write result, process the failed rows to detect new fields, update the BigQuery table schema using the BigQuery Client Library, and re-ingest the failed rows.
 *   **Pros:** Automates schema updates without pipeline restarts while maintaining typed column structures inside BigQuery.
 *   **Cons:** High complexity; introduces latency for rows with new fields.
@@ -822,7 +816,7 @@ This is the standard enterprise pattern for massive ingestion pipelines. Instead
 
 ---
 
-### Pattern C: Tagged Multi-Output Ingestion with GCS Buffering & WaitOn (State-of-the-Art Production Design)
+### Pattern 3: Tagged Multi-Output Ingestion with GCS Buffering & WaitOn (State-of-the-Art Production Design)
 
 This is the most advanced and efficient architecture for handling schema evolution in high-throughput pipelines. It divides ingestion into a **Fast Path** (for normal rows) and a **Safe Path** (for drifted rows), ensuring zero data loss and minimizing Dataflow worker resource usage.
 
@@ -1139,13 +1133,13 @@ If you are dealing with mutable streams where record order is critical, you must
 
 To assist in choosing the correct ingestion architecture, use the following comparison of the key schema-update strategies:
 
-| Dimension / Metric | DLQ Healer (Inline JSON Load) | Tagged GCS Buffer & WaitOn (Pattern C) |
-| :--- | :--- | :--- |
-| **Data Loss Prevention** |   **Zero Data Loss**. Catches failures and retries. |   **Zero Data Loss**. Safe staging prior to table write. |
-| **Max Scale Throughput** | ⚠️ **Medium**. OOM risk on worker memory if failure rate is very high. |   **High**. Parallel GCS writes and offloaded BQ file loads. |
-| **Implementation Complexity**| ⚠️ **Medium** (DoFn with BQ API client). | ❌ **High** (Dynamic tagging, GCS writes, WaitOn sequencing). |
-| **BQ API Rate Limits Risk** | ⚠️ **Medium** (requires Table-Keyed sharding to serialize updates). |   **Low** (Updates grouped per window, executed sequentially by single worker). |
-| **Latency (Normal Rows)** |   **Near-Zero**. Streaming inserts. |   **Near-Zero**. Normal rows follow Fast Path directly. |
-| **Latency (Drifted Rows)** | ⚠️ **Low** (15-second DLQ retry loop). | ⚠️ **Low** (15-second GCS file load window). |
-| **GCS Dependency** | No | Yes (Requires temporary file storage bucket). |
-| **Best Suited For** | Low/Mid volume pipelines where schema drift is infrequent. | High-throughput enterprise pipelines requiring absolute reliability. |
+| Dimension / Metric | Native JSON Column (Pattern 1) | DLQ Healer (Pattern 2) | Tagged GCS Buffer & WaitOn (Pattern 3) |
+| :--- | :--- | :--- | :--- |
+| **Data Loss Prevention** |   **Zero Data Loss**. Schema-on-read ensures all fields are preserved. |   **Zero Data Loss**. Catches failures and retries. |   **Zero Data Loss**. Safe staging prior to table write. |
+| **Max Scale Throughput** |   **High**. Standard BQ streaming writes. | ⚠️ **Medium**. OOM risk on worker memory if failure rate is very high. |   **High**. Parallel GCS writes and offloaded BQ file loads. |
+| **Implementation Complexity**|   **Low**. Just map nested objects directly. | ⚠️ **Medium** (DoFn with BQ API client). | ❌ **High** (Dynamic tagging, GCS writes, WaitOn sequencing). |
+| **BQ API Rate Limits Risk** |   **Low** (no schema changes invoked). | ⚠️ **Medium** (requires Table-Keyed sharding to serialize updates). |   **Low** (Updates grouped per window, executed sequentially by single worker). |
+| **Latency (Normal Rows)** |   **Near-Zero**. Streaming inserts. |   **Near-Zero**. Streaming inserts. |   **Near-Zero**. Normal rows follow Fast Path directly. |
+| **Latency (Drifted Rows)** |   **Near-Zero** (loaded instantly). | ⚠️ **Low** (15-second DLQ retry loop). | ⚠️ **Low** (15-second GCS file load window). |
+| **GCS Dependency** | No | No | Yes (Requires temporary file storage bucket). |
+| **Best Suited For** | Teams that don't need strict type checks on write and want zero operational overhead. | Low/Mid volume pipelines where schema drift is infrequent. | High-throughput enterprise pipelines requiring absolute reliability. |
